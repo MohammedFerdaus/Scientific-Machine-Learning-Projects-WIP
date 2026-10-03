@@ -17,9 +17,18 @@ Part of the SciML Foundations series — a structured sequence of scientific mac
 
 The 1D wave equation describes small transverse vibrations of a taut string:
 
-$$\frac{\partial^2 u}{\partial t^2} = c^2 \frac{\partial^2 u}{\partial x^2}, \quad (x,t) \in [0,1]^2$$
+$$
+\frac{\partial^2 u}{\partial t^2} = c^2\,\frac{\partial^2 u}{\partial x^2}, \qquad (x,t) \in [0,1]^2
+$$
 
-with initial conditions $u(x,0) = \sin(\pi x)$, $u_t(x,0) = 0$, fixed ends $u(0,t) = u(1,t) = 0$, and analytical solution $u(x,t) = \sin(\pi x)\cos(\pi c t)$.
+with initial conditions, fixed ends, and analytical solution:
+
+$$
+\begin{aligned}
+u(x,0) &= \sin(\pi x), & u_t(x,0) &= 0, \\
+u(0,t) &= u(1,t) = 0, & u(x,t) &= \sin(\pi x)\cos(\pi c t).
+\end{aligned}
+$$
 
 This is the first PDE in the series: two independent variables, a second derivative in each, and a new failure mode. The loss treats all times equally, so the network can fit late times before it has learned the initial condition. This project builds a PINN for it from scratch and tests causal training against an unweighted baseline.
 
@@ -50,76 +59,118 @@ A PINN needs two separate kinds of derivative:
 
 | Derivative | What | Mechanism |
 |------------|------|-----------|
-| Physics | $u_{tt}$, $u_{xx}$ — output with respect to inputs $(x,t)$ | Forward mode: hyperdual numbers |
-| Training | $\partial\mathcal{L}/\partial\theta$ — loss with respect to every weight | Reverse mode: manual backprop |
+| Physics | $`u_{tt}`$, $`u_{xx}`$ — output with respect to inputs $`(x,t)`$ | Forward mode: hyperdual numbers |
+| Training | $`\partial\mathcal{L}/\partial\theta`$ — loss with respect to every weight | Reverse mode: manual backprop |
 
 Forward mode suits the first because there are only two inputs. Reverse mode suits the second because there are thousands of parameters and one scalar loss.
 
 ### Forward Mode — Hyperdual Numbers
 
-A hyperdual number is $a + b\,\varepsilon_1 + c\,\varepsilon_2 + d\,\varepsilon_1\varepsilon_2$ with $\varepsilon_1^2 = \varepsilon_2^2 = 0$. Seeding both $\varepsilon$'s along the same input makes the $\varepsilon_1\varepsilon_2$ coefficient of any smooth function exactly its second derivative, with no step size and no truncation error. Multiplication is the product rule,
+A hyperdual number has the form
 
-$$(fg)_{12} = f\,g_{12} + f_1 g_2 + f_2 g_1 + f_{12}\,g,$$
+$$
+a + b\,\varepsilon_1 + c\,\varepsilon_2 + d\,\varepsilon_1\varepsilon_2, \qquad \varepsilon_1^2 = \varepsilon_2^2 = 0.
+$$
 
-and tanh applies the chain rule, $`d_{12}^{\text{out}} = \tanh'\,d_{12} + \tanh''\,d_1 d_2`$. One pass seeded on $x$ gives $u_{xx}$, one seeded on $t$ gives $u_{tt}$.
+Seeding both $`\varepsilon`$'s along the same input makes the $`\varepsilon_1\varepsilon_2`$ coefficient of any smooth function exactly its second derivative, with no step size and no truncation error.
+
+Multiplication is the product rule:
+
+$$
+(fg)_{12} = f\,g_{12} + f_1 g_2 + f_2 g_1 + f_{12}\,g
+$$
+
+and tanh applies the chain rule:
+
+$$
+d^{\text{out}}_{12} = \tanh'(a)\,d_{12} + \tanh''(a)\,d_1 d_2 .
+$$
+
+One pass seeded on $`x`$ gives $`u_{xx}`$, one seeded on $`t`$ gives $`u_{tt}`$.
 
 The hyperdual pass is kept as an independent reference. Training uses the equivalent plain-vector jet below, which is faster and can be reversed.
 
 ### Reverse Mode Through the Jet
 
-For a fixed seed direction $s$, each layer carries the value $h$, first derivative $\dot h$ and second derivative $\ddot h$. A hidden layer maps them as:
+**Notation.** $`\sigma = \tanh`$. For a fixed seed direction $`s \in \{x, t\}`$, each layer carries the value $`h`$, first derivative $`\dot h`$ and second derivative $`\ddot h`$ (all taken with respect to $`s`$). A hidden layer maps them as:
 
-$$z = W h_{\text{prev}} + b, \quad \dot z = W\dot h_{\text{prev}}, \quad \ddot z = W\ddot h_{\text{prev}}$$
+$$
+\begin{aligned}
+z &= W h_{\text{prev}} + b, & \dot z &= W \dot h_{\text{prev}}, & \ddot z &= W \ddot h_{\text{prev}}, \\
+h &= \sigma(z), & \dot h &= \sigma'(z)\,\dot z, & \ddot h &= \sigma'(z)\,\ddot z + \sigma''(z)\,\dot z^{2}.
+\end{aligned}
+$$
 
-$$h = \sigma(z), \quad \dot h = \sigma'\dot z, \quad \ddot h = \sigma'\ddot z + \sigma''\dot z^2$$
+The derivative streams couple in one direction only, so the backward pass runs $`\ddot h \to \dot h \to h`$. Given adjoints $`H_0, H_1, H_2`$ at a layer's output (for $`h, \dot h, \ddot h`$ respectively):
 
-The derivative streams couple in one direction only, so the backward pass runs $\ddot h \to \dot h \to h$. Given adjoints $H_0, H_1, H_2$ at a layer's output:
+$$
+\begin{aligned}
+\bar z &= H_0\,\sigma' + H_1\,\sigma''\,\dot z + H_2\left(\sigma''\,\ddot z + \sigma'''\,\dot z^{2}\right), \\
+\bar{\dot z} &= H_1\,\sigma' + 2 H_2\,\sigma''\,\dot z, \\
+\bar{\ddot z} &= H_2\,\sigma'.
+\end{aligned}
+$$
 
-$$\bar z = H_0\sigma' + H_1\sigma''\dot z + H_2(\sigma''\ddot z + \sigma'''\dot z^2)$$
+The parameter gradients are then
 
-$$\bar{\dot z} = H_1\sigma' + 2H_2\sigma''\dot z, \qquad \bar{\ddot z} = H_2\sigma'$$
+$$
+\begin{aligned}
+dW &= \bar z\,h_{\text{prev}}^{\top} + \bar{\dot z}\,\dot h_{\text{prev}}^{\top} + \bar{\ddot z}\,\ddot h_{\text{prev}}^{\top}, \\
+db &= \bar z .
+\end{aligned}
+$$
 
-$$dW = \bar z\,h_{\text{prev}}^T + \bar{\dot z}\,\dot h_{\text{prev}}^T + \bar{\ddot z}\,\ddot h_{\text{prev}}^T, \quad db = \bar z$$
+Training on a loss containing $`u_{ss}`$ needs the third derivative of the activation:
 
-Training on a loss containing $u_{ss}$ needs the third derivative of the activation, $\sigma''' = (1-\sigma^2)(6\sigma^2 - 2)$.
+$$
+\sigma''' = (1-\sigma^2)(6\sigma^2 - 2).
+$$
 
-One backward function takes three output adjoints $(g_0, g_1, g_2)$ on $(u, u_s, u_{ss})$. Each loss term is a different choice of seeds:
+One backward function takes three output adjoints $`(g_0, g_1, g_2)`$ on $`(u, u_s, u_{ss})`$. Each loss term is a different choice of seeds:
 
-| Loss term | Pass | $g_0$ | $g_1$ | $g_2$ |
-|-----------|------|-------|-------|-------|
-| IC (shared pass) | seed $t$ | $2\lambda_{ic0}(u - \sin\pi x)/N_{ic}$ | $2\lambda_{ic1}\,u_t/N_{ic}$ | 0 |
-| BC | seed $t$ | $2\lambda_{bc}\,u/N_{bc}$ | 0 | 0 |
-| PDE, $t$-pass | seed $t$ | 0 | 0 | $\bar r_i$ |
-| PDE, $x$-pass | seed $x$ | 0 | 0 | $-c^2\bar r_i$ |
+| Loss term | Pass | $`g_0`$ | $`g_1`$ | $`g_2`$ |
+|-----------|------|---------|---------|---------|
+| IC (shared pass) | seed $`t`$ | $`2\lambda_{ic0}\,(u - \sin\pi x)/N_{ic}`$ | $`2\lambda_{ic1}\,u_t/N_{ic}`$ | $`0`$ |
+| BC | seed $`t`$ | $`2\lambda_{bc}\,u/N_{bc}`$ | $`0`$ | $`0`$ |
+| PDE, $`t`$-pass | seed $`t`$ | $`0`$ | $`0`$ | $`\bar r_i`$ |
+| PDE, $`x`$-pass | seed $`x`$ | $`0`$ | $`0`$ | $`-c^2\,\bar r_i`$ |
 
-where $\bar r_i = 2 w_i r_i / N_f$.
+where $`\bar r_i = 2 w_i r_i / N_f`$ and $`r_i = (u_{tt} - c^2 u_{xx})_i`$ is the PDE residual at collocation point $`i`$.
 
 ### Loss
 
-$$\mathcal{L} = \mathcal{L}_{pde} + \lambda_{ic0}\mathcal{L}_{ic0} + \lambda_{ic1}\mathcal{L}_{ic1} + \lambda_{bc}\mathcal{L}_{bc}$$
+$$
+\mathcal{L} = \mathcal{L}_{\text{pde}} + \lambda_{ic0}\,\mathcal{L}_{ic0} + \lambda_{ic1}\,\mathcal{L}_{ic1} + \lambda_{bc}\,\mathcal{L}_{bc}
+$$
 
-| Term | Meaning |
-|------|---------|
-| $`\mathcal{L}_{pde} = \frac{1}{N_f}\sum w_i\,(u_{tt} - c^2 u_{xx})_i^2`$ | Newton's law in the interior |
-| $\mathcal{L}_{ic0} = \text{mean}\,[u(x,0) - \sin\pi x]^2$ | Initial shape |
-| $\mathcal{L}_{ic1} = \text{mean}\,[u_t(x,0)]^2$ | Released from rest |
-| $\mathcal{L}_{bc} = \text{mean}\,[u(0,t)^2 + u(1,t)^2]$ | Clamped ends |
+with the four terms defined as:
+
+$$
+\begin{aligned}
+\mathcal{L}_{\text{pde}} &= \frac{1}{N_f}\sum_{i=1}^{N_f} w_i\,\big(u_{tt} - c^2 u_{xx}\big)_i^{2} && \text{Newton's law in the interior} \\
+\mathcal{L}_{ic0} &= \operatorname{mean}\big[u(x,0) - \sin\pi x\big]^2 && \text{initial shape} \\
+\mathcal{L}_{ic1} &= \operatorname{mean}\big[u_t(x,0)\big]^2 && \text{released from rest} \\
+\mathcal{L}_{bc} &= \operatorname{mean}\big[u(0,t)^2 + u(1,t)^2\big] && \text{clamped ends}
+\end{aligned}
+$$
 
 ### Causal Training
 
-The collocation points are binned into $M$ ordered time windows. With $\mathcal{L}_j$ the mean squared residual of bin $j$, bin $i$ is weighted by
+The collocation points are binned into $`M`$ ordered time windows. With $`\mathcal{L}_j`$ the mean squared residual of bin $`j`$, bin $`i`$ is weighted by
 
-$$w_i = \exp\!\left(-\epsilon\sum_{j \lt i}\mathcal{L}_j\right)$$
+$$
+w_i = \exp\!\Big(-\epsilon \sum_{j<i} \mathcal{L}_j\Big)
+$$
 
-so a later bin only matters once every earlier bin is well fit. The weights are recomputed every epoch and treated as constants in the backward pass (stop-gradient). $\epsilon$ is annealed geometrically from $10^{-2}$ to $10^{1}$.
+so a later bin only matters once every earlier bin is well fit. The weights are recomputed every epoch and treated as constants in the backward pass (stop-gradient). $`\epsilon`$ is annealed geometrically from $`10^{-2}`$ to $`10^{1}`$.
 
 ### Training Setup
 
 | Setting | Value |
 |---------|-------|
-| Collocation points | $N_f = 2000$ interior, $N_{ic} = 100$, $N_{bc} = 100$, all Latin Hypercube Sampled |
-| Optimizer | Adam, $\beta_1 = 0.9$, $\beta_2 = 0.999$ |
-| Learning rate | $10^{-3}$ decaying geometrically to $10^{-4}$ |
+| Collocation points | $`N_f = 2000`$ interior, $`N_{ic} = 100`$, $`N_{bc} = 100`$, all Latin Hypercube Sampled |
+| Optimizer | Adam, $`\beta_1 = 0.9`$, $`\beta_2 = 0.999`$ |
+| Learning rate | $`10^{-3}`$ decaying geometrically to $`10^{-4}`$ |
 | Epochs | 5000 |
 
 ---
@@ -130,11 +181,11 @@ Every differentiation component is checked before training. The backward pass is
 
 | Check | Compares | Result |
 |-------|----------|--------|
-| Hyperdual arithmetic | Hand-derived $x^3$, $\tanh(x)$, $\tanh(2x+1)$, $x^2 t$ | Exact |
+| Hyperdual arithmetic | Hand-derived $`x^3`$, $`\tanh(x)`$, $`\tanh(2x+1)`$, $`x^2 t`$ | Exact |
 | Forward agreement | Jet vs hyperdual vs plain forward | Max diff `3.3e-16` |
-| Backward, $u$ / $u_s$ / $u_{ss}$ | Backprop vs central differences | `~4e-9` / `~1e-8` / `~2e-9` |
-| Full pipeline, $c = 1$ | Assembled gradient vs finite differences | `~9e-10` |
-| Full pipeline, $c = 3$, unequal $\lambda$ | Assembled gradient vs finite differences | `~3e-9` |
+| Backward, $`u`$ / $`u_s`$ / $`u_{ss}`$ | Backprop vs central differences | `~4e-9` / `~1e-8` / `~2e-9` |
+| Full pipeline, $`c = 1`$ | Assembled gradient vs finite differences | `~9e-10` |
+| Full pipeline, $`c = 3`$, unequal $`\lambda`$ | Assembled gradient vs finite differences | `~3e-9` |
 
 The full-pipeline check runs with causal weights off, because finite differences would differentiate through the weights while the backward pass deliberately does not.
 
@@ -142,10 +193,10 @@ The full-pipeline check runs with causal weights off, because finite differences
 
 ## Results
 
-Two runs share the same seed, network and collocation points: an unweighted baseline and cumulative causal training, at $c = 1$.
+Two runs share the same seed, network and collocation points: an unweighted baseline and cumulative causal training, at $`c = 1`$.
 
-| Run | Final total loss | Final PDE loss | Final relative $L_2$ error | Wall time |
-|-----|------------------|----------------|----------------------------|-----------|
+| Run | Final total loss | Final PDE loss | Final relative $`L_2`$ error | Wall time |
+|-----|------------------|----------------|------------------------------|-----------|
 | Baseline | `2.08e-4` | `5.75e-5` | `0.0167` | 1208 s |
 | Causal | `2.10e-4` | `5.92e-5` | `0.0169` | 1268 s |
 
@@ -161,13 +212,13 @@ Two runs share the same seed, network and collocation points: an unweighted base
 
 ![Causal training](results/causal_c1/training.png)
 
-- **No measurable difference at $c = 1$.** The errors are 1.67% and 1.69% on a single seed, and the loss curves and per-bin heatmaps are visually identical.
-- **The baseline showed no causality failure.** At $c = 1$ the solution is half a period of $\cos(\pi t)$, which the unweighted loss fits across all times together.
-- **The causal weights were probably close to 1.** Per-bin residuals are $10^{-3}$ to $10^{-5}$ and $\epsilon$ only reaches 10, so the exponent stays near zero. The minimum weight was not logged, so this is an inference.
+- **No measurable difference at $`c = 1`$.** The errors are 1.67% and 1.69% on a single seed, and the loss curves and per-bin heatmaps are visually identical.
+- **The baseline showed no causality failure.** At $`c = 1`$ the solution is half a period of $`\cos(\pi t)`$, which the unweighted loss fits across all times together.
+- **The causal weights were probably close to 1.** Per-bin residuals are $`10^{-3}`$ to $`10^{-5}`$ and $`\epsilon`$ only reaches 10, so the exponent stays near zero. The minimum weight was not logged, so this is an inference.
 - **Error is concentrated at late times.** In both runs the final error is roughly an order of magnitude larger in the last time bins than the first, with a maximum pointwise error of about 0.025.
-- **Not fully converged.** The loss and $L_2$ curves are still decreasing slowly at 5000 epochs.
+- **Not fully converged.** The loss and $`L_2`$ curves are still decreasing slowly at 5000 epochs.
 
-**Next:** run $c \in \{2, 4\}$ with the minimum causal weight logged and a larger final $\epsilon$, since the causality problem should only appear once $\cos(\pi c t)$ oscillates faster.
+**Next:** run $`c \in \{2, 4\}`$ with the minimum causal weight logged and a larger final $`\epsilon`$, since the causality problem should only appear once $`\cos(\pi c t)`$ oscillates faster.
 
 ---
 
