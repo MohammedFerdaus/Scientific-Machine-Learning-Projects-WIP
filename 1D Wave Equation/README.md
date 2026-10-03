@@ -145,24 +145,30 @@ $$
 
 with the four terms defined as:
 
-$$
-\begin{aligned}
-\mathcal{L}_{\text{pde}} &= \frac{1}{N_f}\sum_{i=1}^{N_f} w_i\,\big(u_{tt} - c^2 u_{xx}\big)_i^{2} && \text{Newton's law in the interior} \\
-\mathcal{L}_{ic0} &= \operatorname{mean}\big[u(x,0) - \sin\pi x\big]^2 && \text{initial shape} \\
-\mathcal{L}_{ic1} &= \operatorname{mean}\big[u_t(x,0)\big]^2 && \text{released from rest} \\
-\mathcal{L}_{bc} &= \operatorname{mean}\big[u(0,t)^2 + u(1,t)^2\big] && \text{clamped ends}
-\end{aligned}
-$$
+## Loss Terms
 
-### Causal Training
+| Term | Equation | Role |
+|:--|:--|:--|
+| $\mathcal{L}_{\text{pde}}$ | $\frac{1}{N_f}\sum_{i=1}^{N_f} w_i\,\big(u_{tt} - c^2 u_{xx}\big)_i^{2}$ | Newton's law in the interior |
+| $\mathcal{L}_{ic0}$ | $\text{mean}\big[u(x,0) - \sin\pi x\big]^2$ | Initial shape |
+| $\mathcal{L}_{ic1}$ | $\text{mean}\big[u_t(x,0)\big]^2$ | Released from rest |
+| $\mathcal{L}_{bc}$ | $\text{mean}\big[u(0,t)^2 + u(1,t)^2\big]$ | Clamped ends |
 
-The collocation points are binned into $`M`$ ordered time windows. With $`\mathcal{L}_j`$ the mean squared residual of bin $`j`$, bin $`i`$ is weighted by
+## Causal Training
 
-$$
-w_i = \exp\!\Big(-\epsilon \sum_{j<i} \mathcal{L}_j\Big)
-$$
+The collocation points are binned into $M$ ordered time windows. With $\mathcal{L}_j$ the mean squared residual of bin $j$, bin $i$ is weighted by
 
-so a later bin only matters once every earlier bin is well fit. The weights are recomputed every epoch and treated as constants in the backward pass (stop-gradient). $`\epsilon`$ is annealed geometrically from $`10^{-2}`$ to $`10^{1}`$.
+$$w_i = \exp\left(-\epsilon \sum_{j=1}^{i-1} \mathcal{L}_{j}\right)$$
+
+so a later bin only matters once every earlier bin is well fit. The weights are recomputed every epoch and treated as constants in the backward pass (stop-gradient). $\epsilon$ is annealed geometrically from $10^{-2}$ to $10^{1}$.
+
+## Causal Training
+
+The collocation points are binned into $M$ ordered time windows. With $\mathcal{L}_j$ the mean squared residual of bin $j$, bin $i$ is weighted by
+
+$$w_i = \exp\left(-\epsilon \sum_{j=1}^{i-1} \mathcal{L}_{j}\right)$$
+
+so a later bin only matters once every earlier bin is well fit. The weights are recomputed every epoch and treated as constants in the backward pass (stop-gradient). $\epsilon$ is annealed geometrically from $10^{-2}$ to $10^{1}$.
 
 ### Training Setup
 
