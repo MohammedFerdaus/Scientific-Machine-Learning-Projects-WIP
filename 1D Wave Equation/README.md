@@ -162,14 +162,6 @@ $$w_i = \exp\left(-\epsilon \sum_{j=1}^{i-1} \mathcal{L}_{j}\right)$$
 
 so a later bin only matters once every earlier bin is well fit. The weights are recomputed every epoch and treated as constants in the backward pass (stop-gradient). $\epsilon$ is annealed geometrically from $10^{-2}$ to $10^{1}$.
 
-## Causal Training
-
-The collocation points are binned into $M$ ordered time windows. With $\mathcal{L}_j$ the mean squared residual of bin $j$, bin $i$ is weighted by
-
-$$w_i = \exp\left(-\epsilon \sum_{j=1}^{i-1} \mathcal{L}_{j}\right)$$
-
-so a later bin only matters once every earlier bin is well fit. The weights are recomputed every epoch and treated as constants in the backward pass (stop-gradient). $\epsilon$ is annealed geometrically from $10^{-2}$ to $10^{1}$.
-
 ### Training Setup
 
 | Setting | Value |
