@@ -198,18 +198,6 @@ Two runs share the same seed, network and collocation points: an unweighted base
 | Baseline | `2.08e-4` | `5.75e-5` | `0.0167` | 1208 s |
 | Causal | `2.10e-4` | `5.92e-5` | `0.0169` | 1268 s |
 
-**Baseline**
-
-![Baseline solution](results/baseline_c1/solution.png)
-
-![Baseline training](results/baseline_c1/training.png)
-
-**Causal**
-
-![Causal solution](results/causal_c1/solution.png)
-
-![Causal training](results/causal_c1/training.png)
-
 - **No measurable difference at $`c = 1`$.** The errors are 1.67% and 1.69% on a single seed, and the loss curves and per-bin heatmaps are visually identical.
 - **The baseline showed no causality failure.** At $`c = 1`$ the solution is half a period of $`\cos(\pi t)`$, which the unweighted loss fits across all times together.
 - **The causal weights were probably close to 1.** Per-bin residuals are $`10^{-3}`$ to $`10^{-5}`$ and $`\epsilon`$ only reaches 10, so the exponent stays near zero. The minimum weight was not logged, so this is an inference.
